@@ -2186,6 +2186,7 @@ function stopNavigation(){
   document.getElementById('driving-overlay').classList.remove('active');
   document.getElementById('mobile-toggle').style.display = '';
   document.getElementById('locate-fab').style.display = '';
+  document.getElementById('sidebar').classList.remove('collapsed');
   if('speechSynthesis' in window) window.speechSynthesis.cancel();
 }
 function onPositionError(err){
