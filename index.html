@@ -721,6 +721,16 @@ svg.leaflet-image-layer.leaflet-interactive path {
   }
   .brand h1{font-size:17px;margin:0;letter-spacing:.3px;font-weight:700;}
   .brand span{font-size:11px;color:var(--text-dim);}
+
+  .mode-selector{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px;}
+  .mode-btn{
+    display:flex;flex-direction:column;align-items:center;gap:3px;
+    background:var(--panel-2);border:1.5px solid var(--line);border-radius:var(--radius);
+    padding:9px 4px;cursor:pointer;font-size:19px;color:var(--text-dim);
+  }
+  .mode-btn span{font-size:10.5px;font-weight:600;}
+  .mode-btn:hover{border-color:var(--accent);}
+  .mode-btn.active{border-color:var(--accent);background:#12302b;color:var(--text);}
   #conn-badge{
     font-size:10.5px;padding:4px 8px;border-radius:20px;border:1px solid var(--line);
     color:var(--text-dim);white-space:nowrap;
@@ -896,6 +906,23 @@ svg.leaflet-image-layer.leaflet-interactive path {
         </div>
         <div id="conn-badge">…</div>
       </div>
+
+      <div class="mode-selector" id="mode-selector">
+        <button class="mode-btn active" data-mode="driving">🚗<span>Voiture</span></button>
+        <button class="mode-btn" data-mode="cycling">🚴<span>Vélo</span></button>
+        <button class="mode-btn" data-mode="foot">🚶<span>Piéton</span></button>
+      </div>
+      <div class="toggle-row" id="balade-row" style="display:none;">
+        <span>🔁 Mode balade (boucle depuis le départ)</span>
+        <label class="switch"><input type="checkbox" id="balade-toggle"><span class="slider"></span></label>
+      </div>
+      <div class="field-group" id="balade-distance-group" style="display:none;">
+        <div class="field-row">
+          <span class="dot mid"></span>
+          <input type="number" id="balade-distance" placeholder="Distance souhaitée (km)" value="5" min="0.5" step="0.5">
+        </div>
+      </div>
+      <div class="empty-note" id="mode-hint" style="display:none;"></div>
 
       <div id="waypoints-container"></div>
       <button class="btn-ghost" id="add-stop">＋ Ajouter une étape</button>
@@ -1080,6 +1107,10 @@ let selectedRouteKey = null;
 let selectedRoute = null;
 let navPoints = [];
 let tollInfo = null; // {km} détecté automatiquement via ORS
+let transportMode = 'driving'; // 'driving' | 'cycling' | 'foot'
+let baladeMode = false;
+const ORS_PROFILE = { driving:'driving-car', cycling:'cycling-regular', foot:'foot-walking' };
+const CALORIES_PER_KM = { cycling: 30, foot: 55 }; // estimation moyenne, à titre indicatif
 let currentSteps = [];
 let currentStepIndex = 0;
 let announcedFlags = [];
@@ -1201,12 +1232,17 @@ const waypointIcon = (kind) => makeDivIcon(kind==='start'?'A':(kind==='end'?'B':
   kind==='start' ? '#2dd4bf' : (kind==='end' ? '#ef4444' : '#f4a340'));
 
 /* ==================== WAYPOINTS UI ==================== */
+function applyBaladeVisibility(){
+  document.querySelectorAll('#waypoints-container .kind-end, #waypoints-container .kind-mid').forEach(el => {
+    el.style.display = baladeMode ? 'none' : 'block';
+  });
+}
 function renderWaypoints(){
   const container = document.getElementById('waypoints-container');
   container.innerHTML = '';
   waypoints.forEach((wp, idx) => {
     const group = document.createElement('div');
-    group.className = 'field-group';
+    group.className = 'field-group kind-' + wp.kind;
     const row = document.createElement('div');
     row.className = 'field-row';
     const dotClass = wp.kind === 'start' ? 'start' : (wp.kind === 'end' ? 'end' : 'mid');
@@ -1233,12 +1269,53 @@ function renderWaypoints(){
       removeBtn.addEventListener('click', () => { waypoints.splice(idx,1); renderWaypoints(); });
     }
   });
+  applyBaladeVisibility();
 }
 
 document.getElementById('add-stop').addEventListener('click', () => {
   waypoints.splice(waypoints.length-1, 0, {label:'Étape intermédiaire', kind:'mid', coord:null, value:''});
   renderWaypoints();
 });
+
+/* ==================== SÉLECTEUR DE MODE DE TRANSPORT ==================== */
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    transportMode = btn.dataset.mode;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+    updateModeUI();
+  });
+});
+document.getElementById('balade-toggle').addEventListener('change', (e) => {
+  baladeMode = e.target.checked;
+  updateModeUI();
+});
+function updateModeUI(){
+  const isDriving = transportMode === 'driving';
+  document.getElementById('balade-row').style.display = isDriving ? 'none' : 'flex';
+  if(isDriving && baladeMode){ baladeMode = false; document.getElementById('balade-toggle').checked = false; }
+
+  document.getElementById('balade-distance-group').style.display = baladeMode ? 'block' : 'none';
+  applyBaladeVisibility();
+  document.getElementById('add-stop').style.display = baladeMode ? 'none' : 'block';
+  document.getElementById('go-btn').textContent = baladeMode ? '🔁 Générer une balade' : "Calculer l'itinéraire";
+
+  const costPanelIds = ['cost-settings-toggle'];
+  costPanelIds.forEach(id => { const el = document.getElementById(id); if(el) el.style.display = isDriving ? 'block' : 'none'; });
+  const costSettings = document.getElementById('cost-settings');
+  if(costSettings && !isDriving) costSettings.classList.remove('open');
+
+  const hint = document.getElementById('mode-hint');
+  if(!isDriving && !getOrsApiKey()){
+    hint.style.display = 'block';
+    hint.innerHTML = 'Les modes vélo/piéton nécessitent une clé <b>OpenRouteService</b> gratuite (⚙️ Paramètres) — le service de routage voiture ne gère pas ces profils.';
+  } else {
+    hint.style.display = 'none';
+  }
+  // routeOptions précédentes ne sont plus valables si on change de mode
+  routeOptions = {};
+  document.getElementById('route-options').innerHTML = '';
+}
+
 
 /* ==================== GEOCODAGE (Nominatim) ==================== */
 let geocodeTimer = null;
@@ -1383,17 +1460,16 @@ async function fetchTollDetection(coordsLatLon){
     return null;
   }
 }
-async function fetchOrsRoute(coordsLatLon, avoidTolls){
+async function fetchOrsRouteGeneric(coordsLatLon, profile, extra){
   const key = getOrsApiKey();
   if(!key) return null;
   try{
-    const body = {
+    const body = Object.assign({
       coordinates: coordsLatLon.map(p => [p[1], p[0]]),
       instructions: true,
       language: 'fr'
-    };
-    if(avoidTolls) body.options = { avoid_features: ['tollways'] };
-    const res = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+    }, extra || {});
+    const res = await fetch(`https://api.openrouteservice.org/v2/directions/${profile}/geojson`, {
       method:'POST',
       headers:{ 'Authorization': key, 'Content-Type':'application/json' },
       body: JSON.stringify(body)
@@ -1407,8 +1483,33 @@ async function fetchOrsRoute(coordsLatLon, avoidTolls){
     return null;
   }
 }
+async function fetchOrsRoute(coordsLatLon, avoidTolls){
+  return fetchOrsRouteGeneric(coordsLatLon, 'driving-car', avoidTolls ? { options:{ avoid_features:['tollways'] } } : {});
+}
+async function fetchBaladeRoute(startCoord, distanceKm){
+  const profile = ORS_PROFILE[transportMode] || 'foot-walking';
+  const points = Math.max(3, Math.min(10, Math.round(distanceKm)));
+  return fetchOrsRouteGeneric([startCoord], profile, {
+    options: { round_trip: { length: Math.round(distanceKm*1000), points, seed: Math.floor(Math.random()*100000) } }
+  });
+}
 
 async function fetchRouteOptions(coordsLatLon){
+  if(transportMode !== 'driving'){
+    const profile = ORS_PROFILE[transportMode];
+    const out = {};
+    const [recommended, shortest] = await Promise.all([
+      fetchOrsRouteGeneric(coordsLatLon, profile, { preference:'recommended' }),
+      fetchOrsRouteGeneric(coordsLatLon, profile, { preference:'shortest' })
+    ]);
+    if(recommended){ out.fastest = recommended; }
+    if(shortest){
+      if(!recommended) out.fastest = shortest;
+      else if(Math.abs(shortest.distance - recommended.distance) > 50) out.shortest = shortest;
+      else out.noAlternative = true;
+    }
+    return out;
+  }
   const coordStr = coordsLatLon.map(p => `${p[1]},${p[0]}`).join(';');
   const out = {};
   const osrmPromise = (async () => {
@@ -1437,6 +1538,9 @@ async function fetchRouteOptions(coordsLatLon){
   return out;
 }
 async function fetchSingleRoute(coordsLatLon, key){
+  if(transportMode !== 'driving'){
+    return fetchOrsRouteGeneric(coordsLatLon, ORS_PROFILE[transportMode], {});
+  }
   if(key === 'notoll'){
     const ors = await fetchOrsRoute(coordsLatLon, true);
     if(ors) return ors;
@@ -1451,9 +1555,15 @@ async function fetchSingleRoute(coordsLatLon, key){
 }
 
 async function calculateRoute(){
+  if(baladeMode){ return generateBalade(); }
+
   const pts = waypoints.filter(w => w.coord);
   if(pts.length < 2){
     setStatus("Renseignez au moins un départ et une arrivée valides (choisissez une suggestion).", true);
+    return;
+  }
+  if(transportMode !== 'driving' && !getOrsApiKey()){
+    setStatus("Ce mode nécessite une clé OpenRouteService gratuite (⚙️ Paramètres).", true);
     return;
   }
   navPoints = pts;
@@ -1483,14 +1593,55 @@ async function calculateRoute(){
   document.getElementById('download-offline-btn').style.display = 'block';
   await Promise.all([ refreshReportsOnRoute(), maybeLoadPOIs() ]);
 
-  // Détection des tronçons à péage en arrière-plan (nécessite une clé ORS)
-  fetchTollDetection(coords).then(info => {
-    tollInfo = info;
-    if(info && info.km > 0.5 && selectedRouteKey !== 'notoll'){
-      manualTollCost = null; // laisser l'auto prendre la main tant que l'utilisateur n'a pas modifié
-    }
-    renderRouteSummary();
-  });
+  if(transportMode === 'driving'){
+    // Détection des tronçons à péage en arrière-plan (nécessite une clé ORS)
+    fetchTollDetection(coords).then(info => {
+      tollInfo = info;
+      if(info && info.km > 0.5 && selectedRouteKey !== 'notoll'){
+        manualTollCost = null; // laisser l'auto prendre la main tant que l'utilisateur n'a pas modifié
+      }
+      renderRouteSummary();
+    });
+  }
+}
+
+async function generateBalade(){
+  const startWp = waypoints.find(w => w.kind === 'start' && w.coord);
+  if(!startWp){
+    setStatus("Renseigne un point de départ valide (choisis une suggestion).", true);
+    return;
+  }
+  if(!getOrsApiKey()){
+    setStatus("Le mode balade nécessite une clé OpenRouteService gratuite (⚙️ Paramètres).", true);
+    return;
+  }
+  const distanceKm = parseFloat(document.getElementById('balade-distance').value) || 5;
+  navPoints = [startWp];
+  tollInfo = null;
+  setStatus('Génération de la balade…');
+  document.getElementById('go-btn').disabled = true;
+  document.getElementById('start-nav-btn').style.display = 'none';
+  document.getElementById('download-offline-btn').style.display = 'none';
+
+  const route = await fetchBaladeRoute(startWp.coord, distanceKm);
+  document.getElementById('go-btn').disabled = false;
+  if(!route){
+    setStatus("Impossible de générer une balade (clé ORS invalide, ou zone trop isolée). Réessaie.", true);
+    return;
+  }
+  routeOptions = { balade: route };
+  selectedRouteKey = 'balade';
+  selectedRoute = route;
+  placeWaypointMarkers([startWp]);
+  drawSelectedRoute(true);
+  document.getElementById('route-options').innerHTML =
+    '<button class="btn-secondary" id="regen-balade-btn">🔁 Générer une autre boucle</button>';
+  document.getElementById('regen-balade-btn').addEventListener('click', generateBalade);
+  renderRouteSummary();
+  setStatus('');
+  document.getElementById('start-nav-btn').style.display = 'block';
+  document.getElementById('download-offline-btn').style.display = 'block';
+  await Promise.all([ refreshReportsOnRoute(), maybeLoadPOIs() ]);
 }
 
 function selectRouteOption(key){
@@ -1542,12 +1693,16 @@ function renderRouteOptionCards(){
   const wrap = document.getElementById('route-options');
   const keys = Object.keys(routeOptions).filter(k => routeOptions[k]);
   if(!keys.length){ wrap.innerHTML=''; return; }
+  const isDriving = transportMode === 'driving';
   const order = ['fastest','shortest','notoll'];
   wrap.innerHTML = '';
   order.filter(k => keys.includes(k)).forEach(key => {
     const route = routeOptions[key];
     const meta = ROUTE_LABELS[key];
-    const {km, cost} = estimateCost(route);
+    const km = route.distance/1000;
+    const metaLine = isDriving
+      ? `<span>≈ ${estimateCost(route).cost.toFixed(2)} € de carburant</span>`
+      : `<span>≈ ${Math.round(km * (CALORIES_PER_KM[transportMode]||0))} kcal</span>`;
     const card = document.createElement('div');
     card.className = 'route-card' + (key === selectedRouteKey ? ' selected' : '');
     card.innerHTML = `
@@ -1556,21 +1711,21 @@ function renderRouteOptionCards(){
         <div class="rc-time">${formatDuration(route.duration)}</div>
       </div>
       <div class="rc-meta">
-        <span>${km.toFixed(0)} km</span>
-        <span>≈ ${cost.toFixed(2)} € de carburant</span>
+        <span>${km.toFixed(isDriving?0:1)} km</span>
+        ${metaLine}
       </div>
       ${key==='notoll' ? '<div class="rc-note">Calculé via OpenRouteService, évite réellement les routes à péage</div>' : ''}
     `;
     card.onclick = () => selectRouteOption(key);
     wrap.appendChild(card);
   });
-  if(!keys.includes('shortest') && routeOptions.noAlternative){
+  if(isDriving && !keys.includes('shortest') && routeOptions.noAlternative){
     const hint = document.createElement('div');
     hint.className = 'empty-note';
     hint.textContent = "Aucun itinéraire alternatif significativement différent trouvé pour ce trajet.";
     wrap.appendChild(hint);
   }
-  if(!keys.includes('notoll') && !getOrsApiKey()){
+  if(isDriving && !keys.includes('notoll') && !getOrsApiKey()){
     const hint = document.createElement('div');
     hint.className = 'empty-note';
     hint.innerHTML = 'Renseigne une clé <b>OpenRouteService</b> gratuite (⚙️ Paramètres) pour débloquer l\'option sans péage.';
@@ -1596,7 +1751,20 @@ function getTollEstimate(){
 }
 function renderRouteSummary(){
   const route = selectedRoute;
-  const km = (route.distance/1000).toFixed(0);
+  const km = (route.distance/1000);
+  const isDriving = transportMode === 'driving';
+
+  if(!isDriving){
+    const kcal = Math.round(km * (CALORIES_PER_KM[transportMode]||0));
+    document.getElementById('route-summary-wrap').innerHTML = `
+      <div class="route-summary">
+        <div class="col"><div class="val">${km.toFixed(1)} km</div><div class="lbl">DISTANCE</div></div>
+        <div class="col"><div class="val">${formatDuration(route.duration)}</div><div class="lbl">DURÉE</div></div>
+        <div class="col"><div class="val">≈ ${kcal} kcal</div><div class="lbl">DÉPENSE EST.</div></div>
+      </div>`;
+    return;
+  }
+
   const {cost} = estimateCost(route);
   const toll = getTollEstimate();
   let tollLabel;
@@ -1614,7 +1782,7 @@ function renderRouteSummary(){
 
   document.getElementById('route-summary-wrap').innerHTML = `
     <div class="route-summary">
-      <div class="col"><div class="val">${km} km</div><div class="lbl">DISTANCE</div></div>
+      <div class="col"><div class="val">${km.toFixed(0)} km</div><div class="lbl">DISTANCE</div></div>
       <div class="col"><div class="val">${formatDuration(route.duration)}</div><div class="lbl">DURÉE</div></div>
       <div class="col"><div class="val">${totalLabel}</div><div class="lbl">CARBURANT + PÉAGE</div></div>
     </div>
