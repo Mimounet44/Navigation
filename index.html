@@ -2167,6 +2167,8 @@ function startNavigation(){
   document.getElementById('driving-overlay').classList.add('active');
   document.getElementById('mobile-toggle').style.display = 'none';
   document.getElementById('locate-fab').style.display = 'none';
+  const zoomCtrl = document.querySelector('.leaflet-control-zoom');
+  if(zoomCtrl) zoomCtrl.style.display = 'none';
   document.getElementById('sidebar').classList.add('collapsed');
   requestWakeLock();
   enableCompass();
@@ -2186,6 +2188,8 @@ function stopNavigation(){
   document.getElementById('driving-overlay').classList.remove('active');
   document.getElementById('mobile-toggle').style.display = '';
   document.getElementById('locate-fab').style.display = '';
+  const zoomCtrl2 = document.querySelector('.leaflet-control-zoom');
+  if(zoomCtrl2) zoomCtrl2.style.display = '';
   document.getElementById('sidebar').classList.remove('collapsed');
   if('speechSynthesis' in window) window.speechSynthesis.cancel();
 }
