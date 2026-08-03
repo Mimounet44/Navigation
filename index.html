@@ -757,6 +757,18 @@ svg.leaflet-image-layer.leaflet-interactive path {
     background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:15px;padding:2px 4px;
   }
   .field-row button.remove:hover{color:var(--danger);}
+  .fav-save-btn{background:none;border:none;cursor:pointer;font-size:15px;padding:2px 4px;opacity:.55;filter:grayscale(1);}
+  .fav-save-btn:hover{opacity:1;filter:none;}
+
+  #favorites-list{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;}
+  .fav-chip{
+    display:flex;align-items:center;gap:0;background:var(--panel-2);border:1px solid var(--line);
+    border-radius:20px;overflow:hidden;font-size:12px;
+  }
+  .fav-chip .fav-main{padding:7px 10px;cursor:pointer;font-weight:600;}
+  .fav-chip .fav-main:hover{color:var(--accent);}
+  .fav-chip button{background:none;border:none;border-left:1px solid var(--line);color:var(--text-dim);cursor:pointer;padding:7px 9px;font-size:11px;}
+  .fav-chip button:hover{color:var(--text);background:#22303b;}
   .suggestions{
     position:absolute;top:calc(100% + 4px);left:0;right:0;
     background:var(--panel-2);border:1px solid var(--line);border-radius:8px;
@@ -939,6 +951,9 @@ svg.leaflet-image-layer.leaflet-interactive path {
         </div>
       </div>
       <div class="empty-note" id="mode-hint" style="display:none;"></div>
+
+      <div class="section-title">⭐ Adresses enregistrées</div>
+      <div id="favorites-list"></div>
 
       <div id="waypoints-container"></div>
       <button class="btn-ghost" id="add-stop">＋ Ajouter une étape</button>
@@ -1281,6 +1296,7 @@ function renderWaypoints(){
     row.innerHTML = `
       <span class="dot ${dotClass}"></span>
       <input type="text" placeholder="${wp.label}" value="${wp.value.replace(/"/g,'&quot;')}" data-idx="${idx}" name="waypoint-${idx}" autocomplete="off"/>
+      <button class="fav-save-btn" data-idx="${idx}" title="Enregistrer comme favori">⭐</button>
       ${wp.kind === 'mid' ? '<button class="remove" data-remove="'+idx+'">✕</button>' : ''}
     `;
     group.appendChild(row);
@@ -1300,6 +1316,7 @@ function renderWaypoints(){
     if(removeBtn){
       removeBtn.addEventListener('click', () => { waypoints.splice(idx,1); renderWaypoints(); });
     }
+    row.querySelector('.fav-save-btn').addEventListener('click', () => saveFavorite(waypoints[idx]));
   });
   applyBaladeVisibility();
 }
@@ -1308,6 +1325,70 @@ document.getElementById('add-stop').addEventListener('click', () => {
   waypoints.splice(waypoints.length-1, 0, {label:'Étape intermédiaire', kind:'mid', coord:null, value:''});
   renderWaypoints();
 });
+
+/* ==================== FAVORIS (stockage local uniquement, jamais partagé) ==================== */
+let favorites = [];
+function loadFavorites(){
+  try{
+    const raw = window.localStorage.getItem('vl_favorites');
+    favorites = raw ? JSON.parse(raw) : [];
+  }catch(e){ favorites = []; }
+}
+function saveFavoritesToStorage(){
+  try{ window.localStorage.setItem('vl_favorites', JSON.stringify(favorites)); }catch(e){}
+}
+function favIcon(label){
+  const l = (label||'').toLowerCase();
+  if(l.includes('domicile') || l.includes('maison') || l.includes('chez moi')) return '🏠';
+  if(l.includes('travail') || l.includes('bureau') || l.includes('boulot')) return '💼';
+  return '📍';
+}
+function saveFavorite(wp){
+  if(!wp || !wp.coord){
+    setStatus("Choisis d'abord une adresse valide (via les suggestions) avant de l'enregistrer.", true);
+    return;
+  }
+  const hasHome = favorites.some(f => f.label.toLowerCase().includes('domicile'));
+  const hasWork = favorites.some(f => f.label.toLowerCase().includes('travail'));
+  const suggestion = !hasHome ? 'Domicile' : (!hasWork ? 'Travail' : (wp.value.split(',')[0] || 'Adresse'));
+  const label = window.prompt('Nom de cette adresse (ex : Domicile, Travail, Chez Marie…)', suggestion);
+  if(!label) return;
+  favorites.push({ id:'fav_'+Date.now(), label: label.trim(), address: wp.value, lat: wp.coord[0], lon: wp.coord[1] });
+  saveFavoritesToStorage();
+  renderFavorites();
+}
+function useFavorite(f, kind){
+  const idx = waypoints.findIndex(w => w.kind === kind);
+  if(idx === -1) return;
+  waypoints[idx].coord = [f.lat, f.lon];
+  waypoints[idx].value = f.address || f.label;
+  renderWaypoints();
+}
+function renderFavorites(){
+  const wrap = document.getElementById('favorites-list');
+  if(!favorites.length){
+    wrap.innerHTML = '<div class="empty-note">Aucune adresse enregistrée. Utilise le ⭐ à côté d\'un champ pour en ajouter une (domicile, travail…).</div>';
+    return;
+  }
+  wrap.innerHTML = '';
+  favorites.forEach(f => {
+    const chip = document.createElement('div');
+    chip.className = 'fav-chip';
+    chip.innerHTML = `
+      <span class="fav-main" title="${f.address ? f.address.replace(/"/g,'&quot;') : ''}">${favIcon(f.label)} ${f.label}</span>
+      <button class="fav-start-btn" title="Utiliser comme départ">A</button>
+      <button class="fav-del-btn" title="Supprimer">✕</button>
+    `;
+    chip.querySelector('.fav-main').addEventListener('click', () => useFavorite(f, 'end'));
+    chip.querySelector('.fav-start-btn').addEventListener('click', () => useFavorite(f, 'start'));
+    chip.querySelector('.fav-del-btn').addEventListener('click', () => {
+      favorites = favorites.filter(x => x.id !== f.id);
+      saveFavoritesToStorage();
+      renderFavorites();
+    });
+    wrap.appendChild(chip);
+  });
+}
 
 /* ==================== SÉLECTEUR DE MODE DE TRANSPORT ==================== */
 document.querySelectorAll('.mode-btn').forEach(btn => {
@@ -2332,8 +2413,8 @@ let incidentAlertShown = {};
 let lastIncidentCheck = 0;
 async function checkIncidentsAhead(here){
   if(!navigationActive || routeCoordsLatLng.length < 2) return;
-  const list = await fetchReportsList();
-  const relevant = list.filter(r => r.type === 'accident' || r.type === 'bouchon');
+  const list = await fetchAllAlerts();
+  const relevant = list.filter(r => r.type === 'accident' || r.type === 'bouchon' || (r.source==='tomtom' && (r.meta.label.includes('Accident') || r.meta.label.includes('Bouchon') || r.meta.label.includes('fermée'))));
   if(!relevant.length) return;
   const hereProj = projectOntoRoute(here);
   for(const r of relevant){
@@ -2350,8 +2431,9 @@ async function checkIncidentsAhead(here){
 }
 function showIncidentAlert(report, aheadKm){
   incidentAlertShown[report.id] = true;
-  const label = report.type === 'accident' ? 'Accident' : 'Bouchon';
-  const icon = report.type === 'accident' ? '💥' : '🚧';
+  const style = getReportStyle(report);
+  const label = style.label;
+  const icon = style.ic;
   const distLabel = aheadKm < 1 ? `${Math.round(aheadKm*1000)} m` : `${aheadKm.toFixed(1)} km`;
   speak(`Attention, ${label.toLowerCase()} signalé à ${distLabel} sur votre itinéraire.`);
 
@@ -2479,6 +2561,8 @@ document.getElementById('mobile-toggle').addEventListener('click', () => {
 });
 
 /* ==================== INIT ==================== */
+loadFavorites();
+renderFavorites();
 renderWaypoints();
 updateConnBadge();
 document.getElementById('storage-mode-note').textContent = firebaseReady
